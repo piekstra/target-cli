@@ -19,8 +19,8 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all
 
-./target/release/target-cli search "convertible car seat" --json
-./target/release/target-cli get 80179068 --json
+./target/release/tgt search "convertible car seat" --json
+./target/release/tgt get 80179068 --json
 ```
 
 ## Layout

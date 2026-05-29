@@ -12,7 +12,7 @@ keywords = ["target", "redsky", "shopping", "cli", "products"]
 categories = ["command-line-utilities"]
 
 [[bin]]
-name = "target-cli"
+name = "tgt"
 path = "src/main.rs"
 
 [dependencies]

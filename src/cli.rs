@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 ///
 /// No account or credentials required — RedSky is a public endpoint.
 #[derive(Parser, Debug)]
-#[command(name = "target-cli", version, about, long_about = None)]
+#[command(name = "tgt", version, about, long_about = None)]
 pub struct Cli {
     /// Emit machine-readable JSON on stdout (diagnostics go to stderr).
     #[arg(long, global = true)]

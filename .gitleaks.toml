@@ -1,0 +1,16 @@
+# gitleaks configuration for target-cli.
+#
+# Extends the default ruleset and allowlists ONE value: Target's public RedSky
+# front-end key. It is NOT a secret — target.com embeds it in its own client-side
+# code, and the RedSky API is intentionally public (see src/client.rs and the
+# baby-registry integration notes). It only looks secret-shaped (40 hex chars),
+# so we allowlist it to avoid a false positive.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Target's public RedSky front-end key — publicly embedded, not a secret."
+regexes = [
+  '''9f36aeafbe60771e321a7cc95a78140772ab3e96''',
+]

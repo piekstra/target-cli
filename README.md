@@ -12,10 +12,13 @@ its output URLs drop straight into `babylist-cli add`.
 ## Install
 
 ```sh
-cargo build --release        # binary at ./target/release/target-cli
+cargo build --release        # binary at ./target/release/tgt
 # or
-cargo install --path .       # installs `target-cli` onto your PATH
+cargo install --path .       # installs the `tgt` binary onto your PATH
 ```
+
+> The crate/repo is `target-cli`, but the binary is **`tgt`** (short and quick to
+> type — it's also Target's ticker).
 
 Requires a recent stable Rust toolchain.
 
@@ -24,7 +27,7 @@ Requires a recent stable Rust toolchain.
 ### Search
 
 ```sh
-$ target-cli search "convertible car seat" -n 3
+$ tgt search "convertible car seat" -n 3
 1. Graco TriRide 3-in-1 Convertible Car Seat - Kipling  [$199.99]
    brand: Graco
    tcin:  80179068
@@ -40,7 +43,7 @@ $ target-cli search "convertible car seat" -n 3
 ### Look up a product by TCIN
 
 ```sh
-$ target-cli get 80179068
+$ tgt get 80179068
 Graco TriRide 3-in-1 Convertible Car Seat  [$199.99]
    brand: Graco
    tcin:  82286564
@@ -51,10 +54,10 @@ Graco TriRide 3-in-1 Convertible Car Seat  [$199.99]
 
 ```sh
 # Just the canonical product URLs, ready to pipe into babylist-cli:
-$ target-cli search "graco stroller" -n 5 --json | jq -r '.[].url'
+$ tgt search "graco stroller" -n 5 --json | jq -r '.[].url'
 
 # Full structured record:
-$ target-cli get 80179068 --json
+$ tgt get 80179068 --json
 {
   "tcin": "82286564",
   "title": "Graco TriRide 3-in-1 Convertible Car Seat",
