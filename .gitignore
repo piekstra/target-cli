@@ -1,0 +1,16 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Secrets (this tool uses none, but keep the guard consistent across the org)
+.env
+.env.*
+*.local
+*.secret
+*.token
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
