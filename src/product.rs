@@ -127,15 +127,16 @@ pub struct Walk {
     pub stopped: Option<Stopped>,
 }
 
-/// Read up to `wanted` products from row `offset`, [`PAGE`] at a time. `page` is one request for
-/// `(offset, count)`. `deadline`, if any, stops it asking for another page.
+/// Read up to `wanted` products from row `offset`, a whole [`PAGE`] at a time. `page` is one
+/// request from a row. `deadline`, if any, stops it asking for another page.
 ///
 /// A failure once rows are in hand keeps them, and says so in [`Walk::stopped`]. A short page ends
 /// the list, and past row 0 so does a 404, both assumptions recorded in `docs/api.md`. A list that
-/// moves between requests can repeat a row, which is dropped. A page with nothing new is RedSky
-/// not honouring `offset`, which would otherwise repeat the same rows forever, so that fails.
+/// moves between requests can repeat a row, which is dropped. A whole page with nothing new is
+/// RedSky not honouring `offset`, which would otherwise repeat the same rows forever, so that is
+/// a failure too. It takes a whole page to show that, which is why every request asks for one.
 pub fn walk(
-    mut page: impl FnMut(u32, u32) -> Result<Value, CliError>,
+    mut page: impl FnMut(u32) -> Result<Value, CliError>,
     offset: u32,
     wanted: u32,
     deadline: Option<Instant>,
@@ -154,8 +155,7 @@ pub fn walk(
             std::thread::sleep(PAGE_PAUSE);
         }
         first = false;
-        let ask = (wanted - found.len() as u32).min(PAGE);
-        let body = page(at, ask);
+        let body = page(at);
         let rows = match body.as_ref().map_err(CliError::clone).and_then(search_rows) {
             Ok(rows) => rows,
             Err(CliError::NotFound(_)) if at > 0 => break,
@@ -173,13 +173,15 @@ pub fn walk(
                 }
             }
         }
-        if !rows.is_empty() && found.len() == before {
-            return Err(changed("search"));
-        }
-        at += rows.len() as u32;
-        if (rows.len() as u32) < ask {
+        if (rows.len() as u32) < PAGE {
             break;
         }
+        // Only a later page can get here with nothing new, so there are rows in hand to keep.
+        if found.len() == before {
+            stopped = Some(Stopped::Failed(changed("search")));
+            break;
+        }
+        at += rows.len() as u32;
     }
     found.truncate(wanted as usize);
     Ok(Walk { found, at, stopped })
@@ -297,17 +299,17 @@ mod tests {
         }
     }
 
-    /// A page's rows, or the failure in its place, in order, with what was asked.
+    /// A page's rows, or the failure in its place, in order, with the rows asked from.
     fn walk_over(
         answers: Vec<Result<Value, CliError>>,
         offset: u32,
         wanted: u32,
-    ) -> (Result<Walk, CliError>, Vec<(u32, u32)>) {
+    ) -> (Result<Walk, CliError>, Vec<u32>) {
         let mut answers = answers.into_iter();
         let mut asked = Vec::new();
         let result = walk(
-            |at, count| {
-                asked.push((at, count));
+            |at| {
+                asked.push(at);
                 answers.next().expect("asked for a page too many")
             },
             offset,
@@ -317,27 +319,30 @@ mod tests {
         (result, asked)
     }
 
-    fn tcins(walked: &Walk) -> Vec<&str> {
-        walked.found.iter().map(|(_, p)| p.tcin.as_str()).collect()
-    }
-
     #[test]
     fn a_walk_asks_for_a_page_at_a_time_and_stops_at_a_short_one() {
         let (walked, asked) =
             walk_over(vec![Ok(page_of(1, PAGE)), Ok(page_of(1 + PAGE, 5))], 0, 100);
         let walked = walked.unwrap();
-        assert_eq!(asked, [(0, 28), (28, 28)]);
+        assert_eq!(asked, [0, 28]);
         assert_eq!(walked.found.len(), 33);
         assert_eq!(walked.found.last().unwrap().0, 33);
         assert!(walked.stopped.is_none());
     }
 
+    /// Every request asks for a whole page, and what is left over is cut. A cut row's place is
+    /// still its own, so a cursor reads on from it.
     #[test]
-    fn a_walk_asks_for_no_more_than_it_wants_and_starts_where_it_is_told() {
-        let (walked, asked) =
-            walk_over(vec![Ok(page_of(1, PAGE)), Ok(page_of(1 + PAGE, 2))], 5, 30);
-        assert_eq!(asked, [(5, 28), (33, 2)]);
-        assert_eq!(walked.unwrap().found.len(), 30);
+    fn a_walk_starts_where_it_is_told_and_stops_at_what_it_wants() {
+        let (walked, asked) = walk_over(
+            vec![Ok(page_of(1, PAGE)), Ok(page_of(1 + PAGE, PAGE))],
+            5,
+            30,
+        );
+        assert_eq!(asked, [5, 33]);
+        let walked = walked.unwrap();
+        assert_eq!(walked.found.len(), 30);
+        assert_eq!(walked.found.last().unwrap().0, 35);
     }
 
     #[test]
@@ -398,7 +403,7 @@ mod tests {
     fn a_passed_deadline_stops_before_the_next_page_and_never_before_the_first() {
         let mut asked = 0;
         let walked = walk(
-            |_, _| {
+            |_| {
                 asked += 1;
                 Ok(page_of(1, PAGE))
             },
@@ -412,10 +417,28 @@ mod tests {
         assert!(matches!(walked.stopped, Some(Stopped::OutOfTime)));
     }
 
+    /// `offset` ignored or clamped: it would repeat the same rows forever. What was read stays,
+    /// and the place stays where the repeat began.
     #[test]
-    fn a_page_with_nothing_new_is_a_changed_api_and_not_more_products() {
+    fn a_whole_page_with_nothing_new_keeps_what_was_read_and_says_the_api_changed() {
         let (walked, _) = walk_over(vec![Ok(page_of(1, PAGE)), Ok(page_of(1, PAGE))], 0, 100);
-        assert_eq!(walked.unwrap_err().exit_code(), 5);
+        let walked = walked.unwrap();
+        assert_eq!(walked.found.len(), PAGE as usize);
+        assert_eq!(walked.at, PAGE);
+        match walked.stopped {
+            Some(Stopped::Failed(e)) => assert_eq!(e.exit_code(), 5),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A row entered above the place between requests, so the last row read is now the next one
+    /// and nothing follows it. This is a healthy list, ending.
+    #[test]
+    fn a_short_page_of_repeats_ends_the_list_and_is_not_a_failure() {
+        let (walked, _) = walk_over(vec![Ok(page_of(1, PAGE)), Ok(page_of(PAGE, 1))], 0, 29);
+        let walked = walked.unwrap();
+        assert_eq!(walked.found.len(), PAGE as usize);
+        assert!(walked.stopped.is_none());
     }
 
     /// A list that moved between requests pushes a row onto the next page.
@@ -424,12 +447,13 @@ mod tests {
         let (walked, _) = walk_over(vec![Ok(page_of(1, PAGE)), Ok(page_of(PAGE, 3))], 0, 100);
         let walked = walked.unwrap();
         assert_eq!(walked.found.len(), PAGE as usize + 2);
-        assert_eq!(tcins(&walked).last().unwrap(), &(PAGE + 2).to_string());
-        assert_eq!(walked.found.last().unwrap().0, PAGE + 3);
+        let (place, last) = walked.found.last().unwrap();
+        assert_eq!(last.tcin, (PAGE + 2).to_string());
+        assert_eq!(*place, PAGE + 3);
     }
 
     #[test]
-    fn rows_beyond_what_was_asked_for_are_dropped() {
+    fn rows_beyond_what_was_wanted_are_cut() {
         let (walked, _) = walk_over(vec![Ok(page_of(1, 5))], 0, 2);
         assert_eq!(walked.unwrap().found.len(), 2);
     }

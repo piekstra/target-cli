@@ -111,9 +111,10 @@ impl RedSky {
             .map_err(|_| CliError::Upstream(format!("{endpoint} did not answer with JSON")))
     }
 
-    /// One page of a keyword search, from row `offset`. The rows are at `data.search.products`.
-    pub fn search_page(&self, keyword: &str, offset: u32, count: u32) -> Result<Value, CliError> {
-        let count = count.clamp(1, PAGE).to_string();
+    /// One whole page of a keyword search, from row `offset`. The rows are at
+    /// `data.search.products`.
+    pub fn search_page(&self, keyword: &str, offset: u32) -> Result<Value, CliError> {
+        let count = PAGE.to_string();
         let offset = offset.to_string();
         let page = format!("/s/{keyword}");
         let params = [

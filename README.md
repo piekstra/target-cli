@@ -7,8 +7,8 @@ Every command has a `--json` mode and stable exit codes, so a person or an agent
 pipeline. `tgt mcp` serves the same reads to Claude.
 
 **Unofficial; not affiliated with or endorsed by Target.** RedSky has no published contract, and
-Target's site turns away some automated clients. When it does, `tgt` says so (HTTP 403 or 435, exit
-5) and does not try to get around it. On 2026-11-03 it answered that way to every request from the
+Target's site turns away some automated clients. When it does, `tgt` says so (HTTP 401, 403 or 435,
+exit 5) and does not try to get around it. On 2026-11-03 it answered that way to every request from the
 machine this release was built on ([`docs/api.md`](docs/api.md)).
 
 ## Install
@@ -48,8 +48,8 @@ so `--store <ID>` or `$TGT_STORE` names one. `tgt config set store <ID>` keeps i
 `tgt config set limit <N>` keeps a limit.
 
 If Target stops answering part way through a long read, `tgt search` prints what it read, says so on
-stderr, and exits 5. Under `--json` the document carries the reason in `stopped`. A rate limit says how
-long to wait when Target does.
+stderr, and exits 5. Under `--json` the document carries the reason in `stopped_early`, as `tgt_search`
+does, so a list is whole when the exit code is 0. A rate limit says how long to wait when Target does.
 
 Should Target rotate the key built into `tgt`, `tgt config set key <KEY>`, `--key` or
 `$TARGET_REDSKY_KEY` takes a newer one.

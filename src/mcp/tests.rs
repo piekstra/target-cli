@@ -25,7 +25,7 @@ struct Canned {
     /// The answer to a search once `pages` runs out, in place of the search fixture.
     then_fail: Option<CliError>,
     store: Option<String>,
-    asked: Mutex<Vec<(String, u32, u32)>>,
+    asked: Mutex<Vec<(String, u32)>>,
 }
 
 impl Canned {
@@ -42,20 +42,11 @@ impl Source for Canned {
         Ok(self.store.clone())
     }
 
-    fn search_page(
-        &self,
-        store: &str,
-        _keyword: &str,
-        offset: u32,
-        count: u32,
-    ) -> Result<Value, CliError> {
+    fn search_page(&self, store: &str, _keyword: &str, offset: u32) -> Result<Value, CliError> {
         if let Some(e) = &self.failure {
             return Err(e.clone());
         }
-        self.asked
-            .lock()
-            .unwrap()
-            .push((store.to_string(), offset, count));
+        self.asked.lock().unwrap().push((store.to_string(), offset));
         let next = self.pages.lock().unwrap().pop_front();
         match (next, &self.then_fail) {
             (Some(page), _) => Ok(page),
@@ -68,7 +59,7 @@ impl Source for Canned {
         if let Some(e) = &self.failure {
             return Err(e.clone());
         }
-        self.asked.lock().unwrap().push((store.to_string(), 0, 0));
+        self.asked.lock().unwrap().push((store.to_string(), 0));
         Ok(self
             .pages
             .lock()
@@ -85,7 +76,7 @@ impl Source for Untouchable {
     fn store_setting(&self) -> Result<Option<String>, ToolError> {
         panic!("this read the config")
     }
-    fn search_page(&self, _: &str, _: &str, _: u32, _: u32) -> Result<Value, CliError> {
+    fn search_page(&self, _: &str, _: &str, _: u32) -> Result<Value, CliError> {
         panic!("this reached Target")
     }
     fn product(&self, _: &str, _: &str) -> Result<Value, CliError> {
@@ -279,15 +270,8 @@ fn a_long_page_takes_several_requests_and_each_asks_for_its_own_rows() {
     let out = fits(&t, SEARCH_TOOL, json!({"query": "lamp", "limit": 60}));
     assert_eq!(out["returned"], 60);
     assert!(out["next_cursor"].is_string(), "{out}");
-    let asked: Vec<(u32, u32)> = t
-        .source
-        .asked
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|a| (a.1, a.2))
-        .collect();
-    assert_eq!(asked, [(0, 28), (28, 28), (56, 5)]);
+    let asked: Vec<u32> = t.source.asked.lock().unwrap().iter().map(|a| a.1).collect();
+    assert_eq!(asked, [0, 28, 56]);
 }
 
 #[test]
@@ -303,7 +287,7 @@ fn a_deep_page_reads_only_its_own_rows() {
     );
     assert_eq!(
         t.source.asked.lock().unwrap().as_slice(),
-        [(DEFAULT_STORE.to_string(), 1, 2)]
+        [(DEFAULT_STORE.to_string(), 1)]
     );
 }
 
@@ -400,14 +384,13 @@ fn a_whole_page_has_no_stopped_early() {
 }
 
 #[test]
-fn a_page_of_repeats_fails_rather_than_reading_as_more_products() {
+fn a_page_of_repeats_keeps_what_was_read_and_does_not_read_as_more_products() {
     let t = TgtTools::new(Canned::with_pages(vec![page_of(0, PAGE), page_of(0, PAGE)]));
-    let text = error_text(&call(
-        &t,
-        SEARCH_TOOL,
-        json!({"query": "lamp", "limit": 60}),
-    ));
-    assert!(text.starts_with("upstream:"), "{text}");
+    let out = fits(&t, SEARCH_TOOL, json!({"query": "lamp", "limit": 60}));
+    assert_eq!(out["returned"], PAGE);
+    let note = out["stopped_early"].as_str().unwrap();
+    assert!(note.contains("not in a shape"), "{note}");
+    assert!(out["next_cursor"].is_string(), "{out}");
 }
 
 // ---- failures -----------------------------------------------------------------------
@@ -528,10 +511,10 @@ fn stub_with(
 }
 
 #[test]
-fn the_client_sends_one_get_per_page_with_the_store_and_a_page_size_redsky_allows() {
+fn the_client_sends_one_get_per_page_with_the_store_and_a_whole_page_size() {
     let (base, seen) = stub(200, r#"{"data":{"search":{"products":[]}}}"#);
     let api = RedSky::at_stub(base, "1234".into()).unwrap();
-    api.search_page("desk lamp", 28, 500).unwrap();
+    api.search_page("desk lamp", 28).unwrap();
     let seen = seen.lock().unwrap();
     assert_eq!(seen.len(), 1);
     let line = &seen[0];

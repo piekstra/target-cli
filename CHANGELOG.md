@@ -27,7 +27,7 @@ Adopts cli-common v0.28.0 and the family spec, piekstra-cli/1.
   overrides. This tool does not try to get around it.
 - A 429 says how long to wait, from `Retry-After` when Target sends it.
 - A long read pauses between requests. If a later page fails, `tgt search` prints what it read, says so
-  in `stopped` and on stderr, and exits with the failure's code. `tgt_search` answers a short page with
+  in `stopped_early` and on stderr, and exits with the failure's code. `tgt_search` answers a short page with
   `stopped_early` and a cursor.
 - `tgt config set key <KEY>` takes a newer public key, should Target rotate the built-in one, for every
   surface including the Claude Desktop extension. `tgt_search` and `tgt_product` read `$TGT_STORE` and

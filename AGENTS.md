@@ -39,7 +39,7 @@ make release      # ./target/release/tgt
 ## Rules
 
 - **Do not work around Target's bot wall.** No browser user agent, no borrowed cookies, no
-  fingerprint tricks, no proxy. A refusal (HTTP 403 or 435) is reported as one, with
+  fingerprint tricks, no proxy. A refusal (HTTP 401, 403 or 435) is reported as one, with
   `Reason::ClientBlocked`. Whether to keep this CLI on RedSky is the owner's question.
 - **Tools only read.** No tool, argument or code path may buy, add to a cart, or touch an account.
   There is no such thing in `RedSky`, and it stays that way.

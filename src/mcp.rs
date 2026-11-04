@@ -42,13 +42,7 @@ const BROKEN_CONFIG: &str = "the tgt config file cannot be read; ask the user to
 pub trait Source {
     /// `$TGT_STORE`, else the `store` setting, read on each call.
     fn store_setting(&self) -> Result<Option<String>, ToolError>;
-    fn search_page(
-        &self,
-        store: &str,
-        keyword: &str,
-        offset: u32,
-        count: u32,
-    ) -> Result<Value, CliError>;
+    fn search_page(&self, store: &str, keyword: &str, offset: u32) -> Result<Value, CliError>;
     fn product(&self, store: &str, tcin: &str) -> Result<Value, CliError>;
 }
 
@@ -75,14 +69,8 @@ impl Source for Live {
             .map_err(|_| ToolError::other(BROKEN_CONFIG))
     }
 
-    fn search_page(
-        &self,
-        store: &str,
-        keyword: &str,
-        offset: u32,
-        count: u32,
-    ) -> Result<Value, CliError> {
-        client(store)?.search_page(keyword, offset, count)
+    fn search_page(&self, store: &str, keyword: &str, offset: u32) -> Result<Value, CliError> {
+        client(store)?.search_page(keyword, offset)
     }
 
     fn product(&self, store: &str, tcin: &str) -> Result<Value, CliError> {
@@ -236,7 +224,7 @@ impl<S: Source> TgtTools<S> {
         // One past the page, so the page knows whether more follow.
         let wanted = u32::try_from(page.limit() + 1).unwrap_or(u32::MAX);
         let walked = walk(
-            |offset, count| self.source.search_page(&store, query, offset, count),
+            |offset| self.source.search_page(&store, query, offset),
             offset,
             wanted,
             Some(Instant::now() + WALK_BUDGET),

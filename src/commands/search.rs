@@ -20,7 +20,7 @@ pub fn run(ctx: &Ctx, query: &[String], limit: Option<u32>) -> Result<(), AppErr
         ctx.store
     ));
     let walked = walk(
-        |offset, count| ctx.api.search_page(keyword, offset, count),
+        |offset| ctx.api.search_page(keyword, offset),
         0,
         limit,
         None,
@@ -56,7 +56,8 @@ pub fn run(ctx: &Ctx, query: &[String], limit: Option<u32>) -> Result<(), AppErr
     Ok(())
 }
 
-/// The search's one document. `stopped` says a partial list is partial.
+/// The search's one document. `stopped_early` says a partial list is partial, as `tgt_search`
+/// does, and the exit code is the failure's.
 fn document(keyword: &str, store: &str, products: &[Product], failure: Option<&AppError>) -> Value {
     let mut doc = json!({
         "query": keyword,
@@ -65,7 +66,7 @@ fn document(keyword: &str, store: &str, products: &[Product], failure: Option<&A
         "products": products,
     });
     if let Some(e) = failure {
-        doc["stopped"] = json!(e.to_string());
+        doc["stopped_early"] = json!(e.to_string());
     }
     doc
 }
@@ -77,9 +78,12 @@ mod tests {
     #[test]
     fn a_partial_list_says_so_and_a_whole_one_says_nothing() {
         let whole = document("lamp", "1", &[], None);
-        assert!(whole.get("stopped").is_none(), "{whole}");
+        assert!(whole.get("stopped_early").is_none(), "{whole}");
         let e = AppError::Upstream("HTTP 500".into());
         let partial = document("lamp", "1", &[], Some(&e));
-        assert!(partial["stopped"].as_str().unwrap().contains("HTTP 500"));
+        assert!(partial["stopped_early"]
+            .as_str()
+            .unwrap()
+            .contains("HTTP 500"));
     }
 }
