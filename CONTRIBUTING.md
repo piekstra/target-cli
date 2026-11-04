@@ -1,8 +1,8 @@
 # Contributing to target-cli
 
 Thanks for helping out! This is a small, focused CLI over Target's public RedSky
-API, part of the [baby-registry](https://github.com/piekstra/baby-registry)
-toolkit. Please skim that repo's `docs/cli-conventions.md` — this tool follows it.
+API. It follows the family spec in
+[cli-common](https://github.com/piekstra/cli-common)'s `DESIGN.md`, and [`AGENTS.md`](AGENTS.md) has this repo's rules.
 
 ## Before you start
 
@@ -13,10 +13,7 @@ toolkit. Please skim that repo's `docs/cli-conventions.md` — this tool follows
 ## Local checks (must pass)
 
 ```sh
-cargo fmt --all
-cargo clippy --all-targets -- -D warnings
-cargo test
-cargo build --release
+make verify
 ```
 
 If you touch RedSky parsing, add/adjust a unit test in `src/product.rs` with a

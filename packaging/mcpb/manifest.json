@@ -1,0 +1,68 @@
+{
+  "manifest_version": "0.3",
+  "name": "tgt",
+  "display_name": "Target product search (tgt)",
+  "version": "0.2.0",
+  "description": "Search Target's public product listings and read a product's price through the open-source tgt CLI. No account, and no tool can buy anything.",
+  "long_description": "Ask Claude to find a product at Target, compare what a store sells, or check a current price. Two read-only tools: tgt_search and tgt_product. They read the same listings target.com shows anyone, with no account and no key to supply, and nothing they do can buy anything, add to a cart or touch an account. The extension asks for nothing and touches no keychain. Your search terms go to Target, and the results go to Claude as part of your conversation. Target's site turns away some automated clients; when it does, the tools say so and do not try to get around it. Unofficial; not affiliated with or endorsed by Target.",
+  "author": {
+    "name": "piekstra",
+    "url": "https://github.com/piekstra"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/piekstra/target-cli"
+  },
+  "homepage": "https://github.com/piekstra/target-cli",
+  "documentation": "https://github.com/piekstra/target-cli#use-with-claude",
+  "support": "https://github.com/piekstra/target-cli/issues",
+  "license": "MIT OR Apache-2.0",
+  "keywords": [
+    "target",
+    "shopping",
+    "products",
+    "read-only"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/tgt",
+    "mcp_config": {
+      "command": "${__dirname}/server/tgt",
+      "args": [
+        "mcp"
+      ],
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/tgt.exe",
+          "args": [
+            "mcp"
+          ]
+        },
+        "linux": {
+          "command": "${__dirname}/server/linux/tgt",
+          "args": [
+            "mcp"
+          ]
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "tgt_search",
+      "description": "Search Target's product listings by keyword."
+    },
+    {
+      "name": "tgt_product",
+      "description": "One product by its tcin, with its price at a store."
+    }
+  ],
+  "tools_generated": false,
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ]
+  }
+}

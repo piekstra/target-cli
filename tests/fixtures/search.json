@@ -1,0 +1,28 @@
+{
+  "data": {
+    "search": {
+      "products": [
+        {
+          "tcin": "00000001",
+          "item": {
+            "product_description": {"title": "Sample Lamp &amp; Shade"},
+            "primary_brand": {"name": "Sample Brand"},
+            "enrichment": {
+              "buy_url": "https://www.target.com/p/sample-lamp/-/A-00000001",
+              "images": {"primary_image_url": "https://target.scene7.com/is/image/Target/SAMPLE_1"}
+            }
+          },
+          "price": {"formatted_current_price": "$1.00"}
+        },
+        {
+          "tcin": "00000002",
+          "item": {
+            "product_description": {"title": "Sample Desk"},
+            "enrichment": {"buy_url": "https://www.target.com/p/sample-desk/-/A-00000002"}
+          },
+          "price": {"formatted_current_price": "$2.00 - $3.00"}
+        }
+      ]
+    }
+  }
+}

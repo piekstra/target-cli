@@ -1,60 +1,38 @@
-mod cli;
-mod client;
-mod error;
-mod output;
-mod product;
+//! Thin binary: parse arguments and dispatch into the library's `commands`.
 
 use clap::Parser;
 
-use cli::{Cli, Command};
-use client::{RedSky, DEFAULT_KEY};
-use error::AppError;
-use product::Product;
+use target_cli::cli::{AuthCmd, Cli, Command};
+use target_cli::commands::{self, Ctx};
+use target_cli::error::AppError;
+use target_cli::mcp::{Live, TgtTools};
 
-fn run(cli: Cli) -> Result<(), AppError> {
-    let key = cli.key.clone().unwrap_or_else(|| DEFAULT_KEY.to_string());
-    let api = RedSky::new(key, cli.store.clone())?;
-
+fn run(cli: &Cli) -> Result<(), AppError> {
+    // None of these reaches Target or needs the config to be readable. `mcp` reads the config on
+    // each call, so listing its tools reads nothing.
     match &cli.command {
-        Command::Search { query, count } => {
-            let keyword = query.join(" ");
-            if cli.verbose && !cli.quiet {
-                eprintln!("searching Target for {keyword:?} (store {})", cli.store);
-            }
-            let body = api.search(&keyword, *count)?;
-            let products: Vec<Product> = body
-                .pointer("/data/search/products")
-                .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(Product::from_node).collect())
-                .unwrap_or_default();
-            if products.is_empty() {
-                return Err(AppError::NotFound(format!("no products for {keyword:?}")));
-            }
-            output::print_search(&products, cli.json);
+        Command::Completions { shell } => return commands::completions::run(*shell),
+        Command::Mcp(args) => return pk_cli_mcp::run(args, TgtTools::new(Live)),
+        Command::Info => return commands::info::run(),
+        Command::Auth(AuthCmd::Status) => return commands::auth::status(cli.common.json),
+        Command::Config(cmd) => {
+            return commands::config::run(cli.common.json, cli.common.quiet, cmd)
         }
-        Command::Get { tcin } => {
-            if cli.verbose && !cli.quiet {
-                eprintln!("looking up tcin {tcin} (store {})", cli.store);
-            }
-            let body = api.product(tcin)?;
-            let node = body
-                .pointer("/data/product")
-                .ok_or_else(|| AppError::NotFound(format!("no product with tcin {tcin}")))?;
-            let product = Product::from_node(node)
-                .ok_or_else(|| AppError::NotFound(format!("no product with tcin {tcin}")))?;
-            output::print_one(&product, cli.json);
-        }
+        Command::SelfUpdate(args) => return commands::self_update::run(&cli.common, args),
+        Command::Search { .. } | Command::Get { .. } => {}
     }
-    Ok(())
+
+    let ctx = Ctx::new(cli)?;
+    match &cli.command {
+        Command::Search { query, limit } => commands::search::run(&ctx, query, *limit),
+        Command::Get { tcin } => commands::get::run(&ctx, tcin),
+        _ => unreachable!("handled above"),
+    }
 }
 
 fn main() {
     let cli = Cli::parse();
-    let quiet = cli.quiet;
-    if let Err(e) = run(cli) {
-        if !quiet {
-            eprintln!("error: {e}");
-        }
-        std::process::exit(e.exit_code());
+    if let Err(e) = run(&cli) {
+        std::process::exit(pk_cli_core::output::fail(&e, cli.common.json));
     }
 }

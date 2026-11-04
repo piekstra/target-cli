@@ -5,11 +5,11 @@ on:
     branches: [main]
   pull_request:
 
-env:
-  CARGO_TERM_COLOR: always
-
 permissions:
   contents: read
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   build:
@@ -17,31 +17,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # The family auth crate links the Linux `keyring` backend (Secret Service),
+      # which needs libdbus at build time.
+      - name: install system deps
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: fmt
-        run: cargo fmt --all -- --check
-      - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
-      - name: test
-        run: cargo test --all
-      - name: build
-        run: cargo build --release
+      # The same gate as a pre-push `make verify`, so the two cannot drift apart.
+      - name: make verify
+        run: make verify
 
   security:
     name: audit / deny / secrets
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
-      security-events: write
       checks: write # rustsec/audit-check publishes a check run; without this it dies with "Resource not accessible by integration"
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo-audit
         uses: rustsec/audit-check@v2

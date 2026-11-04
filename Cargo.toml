@@ -1,15 +1,21 @@
 [package]
 name = "target-cli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-rust-version = "1.74"
-description = "Search and look up Target products via the public RedSky API — JSON output, agent-friendly."
+# 1.89: pk-cli-auth (cli-common) needs it for the token-refresh lock.
+rust-version = "1.89"
+description = "Search and look up Target products via the RedSky API behind target.com, with JSON output, stable exit codes and read-only MCP tools. Unofficial; not affiliated with Target."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/piekstra/target-cli"
-homepage = "https://github.com/piekstra/baby-registry"
 readme = "README.md"
 keywords = ["target", "redsky", "shopping", "cli", "products"]
 categories = ["command-line-utilities"]
+
+# Library + binary split: the logic lives in the library, and `main.rs` parses arguments and
+# dispatches into `commands/`.
+[lib]
+name = "target_cli"
+path = "src/lib.rs"
 
 [[bin]]
 name = "tgt"
@@ -17,10 +23,20 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.28.0", features = ["reqwest"] }
+pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.28.0" }
+pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.28.0" }
+pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.28.0" }
+pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.28.0" }
+pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.28.0", features = ["stdio", "http"] }
+schemars = "1"
+
+[dev-dependencies]
+pk-cli-mcp = { git = "https://github.com/piekstra/cli-common", tag = "v0.28.0", features = ["test-util"] }
 
 [profile.release]
 strip = true

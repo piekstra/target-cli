@@ -2,8 +2,8 @@
 #
 # Extends the default ruleset and allowlists ONE value: Target's public RedSky
 # front-end key. It is NOT a secret — target.com embeds it in its own client-side
-# code, and the RedSky API is intentionally public (see src/client.rs and the
-# baby-registry integration notes). It only looks secret-shaped (40 hex chars),
+# code, and it reads nothing a visitor to the site cannot (see src/client.rs and
+# docs/api.md). It only looks secret-shaped (40 hex chars),
 # so we allowlist it to avoid a false positive.
 
 [extend]

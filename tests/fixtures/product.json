@@ -1,0 +1,16 @@
+{
+  "data": {
+    "product": {
+      "tcin": "00000001",
+      "item": {
+        "product_description": {"title": "Sample Lamp &amp; Shade"},
+        "primary_brand": {"name": "Sample Brand"},
+        "enrichment": {
+          "buy_url": "https://www.target.com/p/sample-lamp/-/A-00000001",
+          "image_info": {"primary_image": {"url": "https://target.scene7.com/is/image/Target/SAMPLE_1"}}
+        }
+      },
+      "price": {"formatted_current_price": "$1.00"}
+    }
+  }
+}
