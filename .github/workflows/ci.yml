@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  checks: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -28,27 +27,21 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: fmt
-        run: cargo fmt --all -- --check
-      - name: clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
-      - name: test
-        run: cargo test --all --locked
-      - name: build
-        run: cargo build --release --locked
-      - name: smoke
-        run: |
-          ./target/release/tgt --version
-          ./target/release/tgt info > /dev/null
-          ./target/release/tgt mcp --list-tools > /dev/null
+      # The same gate as a pre-push `make verify`, so the two cannot drift apart.
+      - name: make verify
+        run: make verify
 
   security:
     name: audit / deny / secrets
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write # rustsec/audit-check publishes a check run; without this it dies with "Resource not accessible by integration"
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo-audit
         uses: rustsec/audit-check@v2

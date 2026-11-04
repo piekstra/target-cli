@@ -148,6 +148,20 @@ fn a_client_initializes_lists_and_is_told_what_the_tools_read() {
     assert!(text(&call).starts_with("usage:"), "{call}");
 }
 
+/// The tools choose a store as the commands do. An id this tool refuses shows which was read,
+/// with no request made.
+#[test]
+fn the_store_comes_from_the_environment_ahead_of_a_broken_config() {
+    let (mut command, config) = tgt("environment");
+    std::fs::write(&config, "{not json").unwrap();
+    command.env("TGT_STORE", "not-a-store");
+    let mut s = Server::start(command);
+    s.initialize();
+    let call = s.call(1, "tgt_search", json!({"query": "lamp"}));
+    assert_eq!(call["result"]["isError"], true, "{call}");
+    assert!(text(&call).contains("not-a-store"), "{call}");
+}
+
 /// A purchase is not a tool, however it is asked for.
 #[test]
 fn asking_for_a_purchase_is_refused() {

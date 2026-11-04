@@ -2,12 +2,19 @@
 //! so every field beyond `tcin` is best-effort, but an answer with no list at all fails rather
 //! than reading as "no products".
 
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
 use pk_cli_core::CliError;
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::client::PAGE;
+
+/// The gap between one search's requests. The service sits behind a bot wall, and a long read is
+/// several requests in a row.
+const PAGE_PAUSE: Duration = Duration::from_millis(250);
 
 /// A normalized Target product, stable across search and product responses.
 #[derive(Serialize, Debug, Clone, PartialEq, JsonSchema)]
@@ -101,30 +108,81 @@ pub fn one_product(body: &Value, tcin: &str) -> Result<Product, CliError> {
     }
 }
 
-/// Read up to `wanted` products from row `offset`, [`PAGE`] at a time, each paired with the row
-/// to read on from after it. `page` is one request for `(offset, count)`.
+/// Why a [`walk`] ended short of what it wanted, with more of the list possibly unread.
+#[derive(Debug)]
+pub enum Stopped {
+    /// A page after the first failed.
+    Failed(CliError),
+    /// The deadline passed before the next page.
+    OutOfTime,
+}
+
+/// What a [`walk`] read.
+#[derive(Debug)]
+pub struct Walk {
+    /// Each product, with the row to read on from after it.
+    pub found: Vec<(u32, Product)>,
+    /// The row a later read starts from.
+    pub at: u32,
+    pub stopped: Option<Stopped>,
+}
+
+/// Read up to `wanted` products from row `offset`, [`PAGE`] at a time. `page` is one request for
+/// `(offset, count)`. `deadline`, if any, stops it asking for another page.
+///
+/// A failure once rows are in hand keeps them, and says so in [`Walk::stopped`]. A short page ends
+/// the list, and past row 0 so does a 404, both assumptions recorded in `docs/api.md`. A list that
+/// moves between requests can repeat a row, which is dropped. A page with nothing new is RedSky
+/// not honouring `offset`, which would otherwise repeat the same rows forever, so that fails.
 pub fn walk(
     mut page: impl FnMut(u32, u32) -> Result<Value, CliError>,
     offset: u32,
     wanted: u32,
-) -> Result<Vec<(u32, Product)>, CliError> {
+    deadline: Option<Instant>,
+) -> Result<Walk, CliError> {
     let mut found = Vec::new();
+    let mut seen = HashSet::new();
     let mut at = offset;
+    let mut stopped = None;
+    let mut first = true;
     while (found.len() as u32) < wanted {
+        if !first {
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                stopped = Some(Stopped::OutOfTime);
+                break;
+            }
+            std::thread::sleep(PAGE_PAUSE);
+        }
+        first = false;
         let ask = (wanted - found.len() as u32).min(PAGE);
-        let body = page(at, ask)?;
-        let rows = search_rows(&body)?;
+        let body = page(at, ask);
+        let rows = match body.as_ref().map_err(CliError::clone).and_then(search_rows) {
+            Ok(rows) => rows,
+            Err(CliError::NotFound(_)) if at > 0 => break,
+            Err(e) if found.is_empty() => return Err(e),
+            Err(e) => {
+                stopped = Some(Stopped::Failed(e));
+                break;
+            }
+        };
+        let before = found.len();
         for (index, row) in rows.iter().enumerate() {
             if let Some(product) = Product::from_node(row) {
-                found.push((at + index as u32 + 1, product));
+                if seen.insert(product.tcin.clone()) {
+                    found.push((at + index as u32 + 1, product));
+                }
             }
+        }
+        if !rows.is_empty() && found.len() == before {
+            return Err(changed("search"));
         }
         at += rows.len() as u32;
         if (rows.len() as u32) < ask {
             break;
         }
     }
-    Ok(found)
+    found.truncate(wanted as usize);
+    Ok(Walk { found, at, stopped })
 }
 
 /// A TCIN is digits, and reaches a query string.
@@ -239,48 +297,141 @@ mod tests {
         }
     }
 
+    /// A page's rows, or the failure in its place, in order, with what was asked.
+    fn walk_over(
+        answers: Vec<Result<Value, CliError>>,
+        offset: u32,
+        wanted: u32,
+    ) -> (Result<Walk, CliError>, Vec<(u32, u32)>) {
+        let mut answers = answers.into_iter();
+        let mut asked = Vec::new();
+        let result = walk(
+            |at, count| {
+                asked.push((at, count));
+                answers.next().expect("asked for a page too many")
+            },
+            offset,
+            wanted,
+            None,
+        );
+        (result, asked)
+    }
+
+    fn tcins(walked: &Walk) -> Vec<&str> {
+        walked.found.iter().map(|(_, p)| p.tcin.as_str()).collect()
+    }
+
     #[test]
     fn a_walk_asks_for_a_page_at_a_time_and_stops_at_a_short_one() {
-        let mut asked = Vec::new();
-        let found = walk(
-            |offset, count| {
-                asked.push((offset, count));
-                Ok(page_of(offset, if offset == 56 { 3 } else { count }))
-            },
-            0,
-            100,
-        )
-        .unwrap();
-        assert_eq!(asked, [(0, 28), (28, 28), (56, 28)]);
-        assert_eq!(found.len(), 59);
-        assert_eq!(found[0], (1, Product::from_node(&node(0)).unwrap()));
-        assert_eq!(found[58].0, 59);
+        let (walked, asked) =
+            walk_over(vec![Ok(page_of(1, PAGE)), Ok(page_of(1 + PAGE, 5))], 0, 100);
+        let walked = walked.unwrap();
+        assert_eq!(asked, [(0, 28), (28, 28)]);
+        assert_eq!(walked.found.len(), 33);
+        assert_eq!(walked.found.last().unwrap().0, 33);
+        assert!(walked.stopped.is_none());
     }
 
     #[test]
     fn a_walk_asks_for_no_more_than_it_wants_and_starts_where_it_is_told() {
-        let mut asked = Vec::new();
-        let found = walk(
-            |offset, count| {
-                asked.push((offset, count));
-                Ok(page_of(offset, count))
-            },
-            100,
-            30,
-        )
-        .unwrap();
-        assert_eq!(asked, [(100, 28), (128, 2)]);
-        assert_eq!(found.len(), 30);
-        assert_eq!(found[29].0, 130);
+        let (walked, asked) =
+            walk_over(vec![Ok(page_of(1, PAGE)), Ok(page_of(1 + PAGE, 2))], 5, 30);
+        assert_eq!(asked, [(5, 28), (33, 2)]);
+        assert_eq!(walked.unwrap().found.len(), 30);
     }
 
-    /// A row with no TCIN is skipped, and still counts toward where to read on.
     #[test]
     fn a_skipped_row_does_not_move_the_next_rows_place() {
-        let body = json!({"data": {"search": {"products": [{"no": "tcin"}, {"tcin": "1"}]}}});
-        let found = walk(|_, _| Ok(body.clone()), 10, 28).unwrap();
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].0, 12);
+        let body = json!({"data": {"search": {"products": [
+            {"tcin": "1"}, {"no": "tcin"}, {"tcin": "3"},
+        ]}}});
+        let (walked, _) = walk_over(vec![Ok(body)], 10, 28);
+        let keys: Vec<u32> = walked.unwrap().found.iter().map(|(k, _)| *k).collect();
+        assert_eq!(keys, [11, 13]);
+    }
+
+    #[test]
+    fn a_failure_on_the_first_page_is_the_answer() {
+        let (walked, _) = walk_over(vec![Err(CliError::Upstream("HTTP 500".into()))], 0, 10);
+        assert_eq!(walked.unwrap_err().exit_code(), 5);
+    }
+
+    #[test]
+    fn a_failure_on_a_later_page_keeps_what_was_read_and_where_to_read_on() {
+        let (walked, _) = walk_over(
+            vec![
+                Ok(page_of(1, PAGE)),
+                Err(CliError::Upstream("HTTP 500".into())),
+            ],
+            0,
+            100,
+        );
+        let walked = walked.unwrap();
+        assert_eq!(walked.found.len(), PAGE as usize);
+        assert_eq!(walked.at, PAGE);
+        assert!(matches!(walked.stopped, Some(Stopped::Failed(_))));
+    }
+
+    #[test]
+    fn a_changed_answer_on_a_later_page_keeps_what_was_read_too() {
+        let (walked, _) = walk_over(vec![Ok(page_of(1, PAGE)), Ok(json!({}))], 0, 100);
+        assert!(matches!(walked.unwrap().stopped, Some(Stopped::Failed(_))));
+    }
+
+    /// A 404 at the start is no result at all. Past it, the list has ended.
+    #[test]
+    fn a_404_past_the_first_row_ends_the_list_and_at_the_first_row_does_not() {
+        let gone = || Err(CliError::NotFound("no result from plp_search_v2".into()));
+        let (walked, _) = walk_over(vec![Ok(page_of(1, PAGE)), gone()], 0, 100);
+        let walked = walked.unwrap();
+        assert_eq!(walked.found.len(), PAGE as usize);
+        assert!(walked.stopped.is_none());
+
+        let (walked, _) = walk_over(vec![gone()], 28, 10);
+        assert!(walked.unwrap().found.is_empty());
+
+        let (walked, _) = walk_over(vec![gone()], 0, 10);
+        assert_eq!(walked.unwrap_err().exit_code(), 4);
+    }
+
+    #[test]
+    fn a_passed_deadline_stops_before_the_next_page_and_never_before_the_first() {
+        let mut asked = 0;
+        let walked = walk(
+            |_, _| {
+                asked += 1;
+                Ok(page_of(1, PAGE))
+            },
+            0,
+            100,
+            Some(Instant::now()),
+        )
+        .unwrap();
+        assert_eq!(asked, 1);
+        assert_eq!(walked.at, PAGE);
+        assert!(matches!(walked.stopped, Some(Stopped::OutOfTime)));
+    }
+
+    #[test]
+    fn a_page_with_nothing_new_is_a_changed_api_and_not_more_products() {
+        let (walked, _) = walk_over(vec![Ok(page_of(1, PAGE)), Ok(page_of(1, PAGE))], 0, 100);
+        assert_eq!(walked.unwrap_err().exit_code(), 5);
+    }
+
+    /// A list that moved between requests pushes a row onto the next page.
+    #[test]
+    fn a_repeated_row_is_dropped_and_the_rest_keep_their_places() {
+        let (walked, _) = walk_over(vec![Ok(page_of(1, PAGE)), Ok(page_of(PAGE, 3))], 0, 100);
+        let walked = walked.unwrap();
+        assert_eq!(walked.found.len(), PAGE as usize + 2);
+        assert_eq!(tcins(&walked).last().unwrap(), &(PAGE + 2).to_string());
+        assert_eq!(walked.found.last().unwrap().0, PAGE + 3);
+    }
+
+    #[test]
+    fn rows_beyond_what_was_asked_for_are_dropped() {
+        let (walked, _) = walk_over(vec![Ok(page_of(1, 5))], 0, 2);
+        assert_eq!(walked.unwrap().found.len(), 2);
     }
 
     #[test]

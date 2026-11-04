@@ -37,7 +37,13 @@ impl Ctx {
                 .unwrap_or(DEFAULT_STORE),
         )?;
         Ok(Ctx {
-            api: RedSky::new(cli.key.clone(), store.clone())?,
+            api: RedSky::new(
+                cli.key
+                    .clone()
+                    .filter(|k| !k.is_empty())
+                    .or_else(|| cfg.key.clone()),
+                store.clone(),
+            )?,
             cfg,
             store,
             json: cli.common.json,

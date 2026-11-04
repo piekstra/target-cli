@@ -23,8 +23,15 @@ Adopts cli-common v0.28.0 and the family spec, piekstra-cli/1.
 - A TCIN or a store id that is not digits is refused before any request, with exit 2.
 - A search answer with no product list is an upstream error, exit 5, where it read as "no products",
   exit 4. An answer with no `data` for a product does the same.
-- Target refusing the client (HTTP 403 or 435) is reported as a refusal. This tool does not try to
-  get around it.
+- Target refusing the client (HTTP 401, 403 or 435) is reported as a refusal, which also names the key
+  overrides. This tool does not try to get around it.
+- A 429 says how long to wait, from `Retry-After` when Target sends it.
+- A long read pauses between requests. If a later page fails, `tgt search` prints what it read, says so
+  in `stopped` and on stderr, and exits with the failure's code. `tgt_search` answers a short page with
+  `stopped_early` and a cursor.
+- `tgt config set key <KEY>` takes a newer public key, should Target rotate the built-in one, for every
+  surface including the Claude Desktop extension. `tgt_search` and `tgt_product` read `$TGT_STORE` and
+  `$TARGET_REDSKY_KEY` as the commands do.
 - Releases: tag-triggered draft-then-publish with `.mcpb`, macOS, Linux and Windows assets, and a
   smoke run of each binary a runner can execute. These are this repo's first releases.
 - `rust-version` is now 1.89, which `pk-cli-auth` needs.

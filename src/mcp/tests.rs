@@ -22,6 +22,8 @@ fn fixture(name: &str) -> Value {
 struct Canned {
     pages: Mutex<VecDeque<Value>>,
     failure: Option<CliError>,
+    /// The answer to a search once `pages` runs out, in place of the search fixture.
+    then_fail: Option<CliError>,
     store: Option<String>,
     asked: Mutex<Vec<(String, u32, u32)>>,
 }
@@ -54,12 +56,12 @@ impl Source for Canned {
             .lock()
             .unwrap()
             .push((store.to_string(), offset, count));
-        Ok(self
-            .pages
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or_else(|| fixture("search")))
+        let next = self.pages.lock().unwrap().pop_front();
+        match (next, &self.then_fail) {
+            (Some(page), _) => Ok(page),
+            (None, Some(e)) => Err(e.clone()),
+            (None, None) => Ok(fixture("search")),
+        }
     }
 
     fn product(&self, store: &str, _tcin: &str) -> Result<Value, CliError> {
@@ -363,6 +365,51 @@ fn a_cursor_holding_anything_but_a_row_number_is_refused_before_reading() {
     assert!(text.starts_with("usage:"), "{text}");
 }
 
+/// A rate limit part way through a long read loses nothing, and does not read the same rows again.
+#[test]
+fn a_failure_part_way_hands_back_what_was_read_and_where_to_read_on() {
+    let t = TgtTools::new(Canned {
+        pages: Mutex::new(vec![page_of(0, PAGE)].into()),
+        then_fail: Some(
+            CliError::Upstream("rate limited by Target (HTTP 429)".into())
+                .with_remedy("wait 300 seconds before trying again"),
+        ),
+        ..Canned::default()
+    });
+    let out = fits(&t, SEARCH_TOOL, json!({"query": "lamp", "limit": 60}));
+    assert_eq!(out["returned"], PAGE);
+    let note = out["stopped_early"].as_str().unwrap();
+    assert!(note.contains("HTTP 429"), "{note}");
+    assert!(note.contains("300 seconds"), "{note}");
+    assert!(out["next_cursor"].is_string(), "{out}");
+
+    t.source.asked.lock().unwrap().clear();
+    let text = error_text(&call(
+        &t,
+        SEARCH_TOOL,
+        json!({"query": "lamp", "limit": 60, "cursor": out["next_cursor"]}),
+    ));
+    assert!(text.contains("300 seconds"), "{text}");
+    assert_eq!(t.source.asked.lock().unwrap()[0].1, PAGE);
+}
+
+#[test]
+fn a_whole_page_has_no_stopped_early() {
+    let out = fits(&tools(), SEARCH_TOOL, json!({"query": "lamp"}));
+    assert!(out.get("stopped_early").is_none(), "{out}");
+}
+
+#[test]
+fn a_page_of_repeats_fails_rather_than_reading_as_more_products() {
+    let t = TgtTools::new(Canned::with_pages(vec![page_of(0, PAGE), page_of(0, PAGE)]));
+    let text = error_text(&call(
+        &t,
+        SEARCH_TOOL,
+        json!({"query": "lamp", "limit": 60}),
+    ));
+    assert!(text.starts_with("upstream:"), "{text}");
+}
+
 // ---- failures -----------------------------------------------------------------------
 
 /// Target's edge turning this client away is not a broken tool, and not one to retry at.
@@ -371,7 +418,8 @@ fn a_refusal_says_what_it_is_and_not_to_retry() {
     let t = TgtTools::new(Canned {
         failure: Some(
             CliError::Upstream("Target refused this request (HTTP 435).".into())
-                .because(Reason::ClientBlocked),
+                .because(Reason::ClientBlocked)
+                .with_remedy(crate::client::REFUSAL_REMEDY),
         ),
         ..Canned::default()
     });
@@ -386,6 +434,7 @@ fn a_refusal_says_what_it_is_and_not_to_retry() {
             text.contains("retrying now will not help"),
             "{tool}: {text}"
         );
+        assert!(text.contains("tgt config set key"), "{tool}: {text}");
     }
 }
 
@@ -416,10 +465,44 @@ fn an_unknown_product_is_not_found_and_points_at_search() {
     assert!(text.contains(SEARCH_TOOL), "{text}");
 }
 
+#[test]
+fn a_rate_limit_says_how_long_to_wait() {
+    let t = TgtTools::new(Canned {
+        failure: Some(
+            CliError::Upstream("rate limited by Target (HTTP 429)".into())
+                .with_remedy("wait 300 seconds before trying again"),
+        ),
+        ..Canned::default()
+    });
+    let text = error_text(&call(&t, SEARCH_TOOL, json!({"query": "lamp"})));
+    assert!(text.contains("HTTP 429"), "{text}");
+    assert!(text.contains("wait 300 seconds"), "{text}");
+}
+
+#[test]
+fn a_search_with_no_result_does_not_send_the_model_back_to_search_for_a_tcin() {
+    let t = TgtTools::new(Canned {
+        failure: Some(CliError::NotFound("no result from plp_search_v2".into())),
+        ..Canned::default()
+    });
+    let text = error_text(&call(&t, SEARCH_TOOL, json!({"query": "lamp"})));
+    assert!(text.contains("other search terms"), "{text}");
+    assert!(!text.contains("tcin"), "{text}");
+}
+
 // ---- the real client over a local server ----------------------------------------------
 
 /// A plain HTTP server that answers `status` and `body` to everything, keeping each request line.
 fn stub(status: u16, body: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
+    stub_with(status, "", body)
+}
+
+/// [`stub`], with `headers`, each ending in a line break, on every answer.
+fn stub_with(
+    status: u16,
+    headers: &'static str,
+    body: &'static str,
+) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let seen: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -434,8 +517,8 @@ fn stub(status: u16, body: &'static str) -> (String, Arc<Mutex<Vec<String>>>) {
                 .unwrap()
                 .push(text.lines().next().unwrap_or("").to_string());
             let answer = format!(
-                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-                 Connection: close\r\n\r\n{body}",
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n{headers}\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
             let _ = conn.write_all(answer.as_bytes());
@@ -464,6 +547,7 @@ fn http_statuses_mean_what_they_should() {
     for (status, code, needle) in [
         (435, 5, "HTTP 435"),
         (403, 5, "HTTP 403"),
+        (401, 5, "HTTP 401"),
         (429, 5, "HTTP 429"),
         (404, 4, "no result"),
         (500, 5, "HTTP 500"),
@@ -477,10 +561,39 @@ fn http_statuses_mean_what_they_should() {
         assert!(e.message().contains(needle), "{status}: {e}");
         assert_eq!(
             e.reason() == Some(Reason::ClientBlocked),
-            status == 435 || status == 403,
+            [401, 403, 435].contains(&status),
             "{status}"
         );
     }
+}
+
+#[test]
+fn a_refusal_names_the_key_overrides_at_a_terminal_too() {
+    let (base, _) = stub(403, "<html>denied</html>");
+    let e = RedSky::at_stub(base, "1".into())
+        .unwrap()
+        .product("1")
+        .unwrap_err();
+    let text = e.to_string();
+    assert!(text.contains("tgt config set key"), "{text}");
+    assert!(text.contains("$TARGET_REDSKY_KEY"), "{text}");
+}
+
+#[test]
+fn a_429_carries_retry_after_or_says_not_to_retry_at_once() {
+    let (base, _) = stub_with(429, "Retry-After: 300\r\n", "{}");
+    let e = RedSky::at_stub(base, "1".into())
+        .unwrap()
+        .product("1")
+        .unwrap_err();
+    assert_eq!(e.remedy(), Some("wait 300 seconds before trying again"));
+
+    let (base, _) = stub(429, "{}");
+    let e = RedSky::at_stub(base, "1".into())
+        .unwrap()
+        .product("1")
+        .unwrap_err();
+    assert!(e.remedy().unwrap().contains("retrying at once"), "{e}");
 }
 
 /// RedSky answers a product page with 206.

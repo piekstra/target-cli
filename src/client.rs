@@ -8,8 +8,8 @@ use pk_cli_core::CliError;
 use serde_json::Value;
 
 /// The key target.com's own client-side code carries. It is not a secret and not a credential:
-/// it reads nothing a visitor to the site cannot. `--key` and `$TARGET_REDSKY_KEY` override it,
-/// should it rotate.
+/// it reads nothing a visitor to the site cannot. `--key`, `$TARGET_REDSKY_KEY` and the `key`
+/// setting override it, should it rotate.
 pub const DEFAULT_KEY: &str = "9f36aeafbe60771e321a7cc95a78140772ab3e96";
 
 /// Prices and availability are per store, so a request has to name one.
@@ -28,10 +28,17 @@ const UA: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (+https://github.com/piekstra/target-cli)"
 );
-const TIMEOUT: Duration = Duration::from_secs(20);
+/// How long one request may take.
+pub const TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Target's edge answering that it will not serve this client.
-const REFUSED: [u16; 2] = [403, 435];
+/// Target answering that it will not serve this client. A rotated key could answer this way too.
+const REFUSED: [u16; 3] = [401, 403, 435];
+
+/// What to do about a refusal, for a person at a terminal and for a model to pass on.
+pub const REFUSAL_REMEDY: &str =
+    "it may pass, and retrying now will not help. If it goes on, Target may have rotated \
+     the key built into tgt: `tgt config set key <KEY>`, `--key` or `$TARGET_REDSKY_KEY` takes a \
+     newer one, and a newer release of tgt may carry it";
 
 /// A client bound to one store.
 pub struct RedSky {
@@ -79,13 +86,21 @@ impl RedSky {
                 "Target refused this request (HTTP {status}). Its site turns away some automated \
                  clients, and this tool does not try to get around that"
             ))
-            .because(Reason::ClientBlocked));
+            .because(Reason::ClientBlocked)
+            .with_remedy(REFUSAL_REMEDY));
         }
         match status {
             429 => {
-                return Err(CliError::Upstream(
-                    "rate limited by Target (HTTP 429): slow down and retry".into(),
-                ))
+                let wait = match pk_cli_http::retry_after(resp.headers()) {
+                    Some(wait) => format!("wait {} seconds before trying again", wait.as_secs()),
+                    None => "wait a few minutes before trying again, since retrying at once \
+                             keeps the limit in force"
+                        .to_string(),
+                };
+                return Err(
+                    CliError::Upstream("rate limited by Target (HTTP 429)".into())
+                        .with_remedy(wait),
+                );
             }
             404 => return Err(CliError::NotFound(format!("no result from {endpoint}"))),
             // A product page commonly answers 206, partial content.

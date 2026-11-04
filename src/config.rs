@@ -1,5 +1,6 @@
 //! Non-secret preferences, stored by the family config crate at
-//! `${XDG_CONFIG_HOME:-~/.config}/tgt/config.json`. Nothing here is a secret.
+//! `${XDG_CONFIG_HOME:-~/.config}/tgt/config.json`. Nothing here is a secret: `key` is the key
+//! target.com's own client-side code carries.
 
 use pk_cli_config::ConfigStore;
 use serde::{Deserialize, Serialize};
@@ -12,7 +13,7 @@ use crate::product::checked_store;
 pub const APP: &str = "tgt";
 
 /// The config keys `tgt config set` accepts, for validation and error text.
-pub const KEYS: &[&str] = &["store", "limit"];
+pub const KEYS: &[&str] = &["store", "limit", "key"];
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -23,6 +24,11 @@ pub struct Config {
     /// Default `--limit` for searches when the flag is not given.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+
+    /// RedSky's public key, should the one built in rotate. This is how the Claude Desktop
+    /// extension, which starts with no environment of the user's, takes a newer one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 pub fn store() -> ConfigStore {
@@ -43,6 +49,18 @@ pub fn set(cfg: &mut Config, key: &str, value: &str) -> Result<(), AppError> {
                 AppError::Usage(format!("limit must be a whole number, got `{value}`"))
             })?;
             cfg.limit = Some(checked_limit(n)?);
+        }
+        "key" => {
+            let value = value.trim();
+            let ok = !value.is_empty()
+                && value.len() <= 128
+                && value.chars().all(|c| c.is_ascii_alphanumeric());
+            if !ok {
+                return Err(AppError::Usage(
+                    "key must be letters and digits, as target.com's own requests carry it".into(),
+                ));
+            }
+            cfg.key = Some(value.to_string());
         }
         other => return Err(unknown_key(other)),
     }
@@ -65,6 +83,7 @@ pub fn unset(cfg: &mut Config, key: &str) -> Result<bool, AppError> {
     let had = match key {
         "store" => cfg.store.take().is_some(),
         "limit" => cfg.limit.take().is_some(),
+        "key" => cfg.key.take().is_some(),
         other => return Err(unknown_key(other)),
     };
     Ok(had)
@@ -90,6 +109,9 @@ mod tests {
         assert!(!unset(&mut cfg, "store").unwrap());
         set(&mut cfg, "limit", "25").unwrap();
         assert_eq!(cfg.limit, Some(25));
+        set(&mut cfg, "key", "abc123").unwrap();
+        assert_eq!(cfg.key.as_deref(), Some("abc123"));
+        assert!(unset(&mut cfg, "key").unwrap());
     }
 
     #[test]
@@ -100,6 +122,8 @@ mod tests {
             ("limit", "abc"),
             ("limit", "0"),
             ("limit", "201"),
+            ("key", ""),
+            ("key", "a&b=c"),
             ("nope", "x"),
         ] {
             assert_eq!(

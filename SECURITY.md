@@ -22,7 +22,7 @@ set one up: `tgt mcp` results reach Claude, and `--http` results pass through yo
 account.
 
 The only secret this tool can hold is the bearer token of `mcp --http`, below. No other state is kept
-beyond the config file, which holds a store id and a limit. Dependency advisories are the other concern
+beyond the config file, which holds a store id, a limit and, if you set it, Target's public key. Dependency advisories are the other concern
 here, and `cargo audit` and `cargo deny` run in CI.
 
 ## MCP tools

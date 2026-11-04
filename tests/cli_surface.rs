@@ -145,6 +145,16 @@ fn the_config_round_trips_and_its_path_is_under_the_config_dir() {
     assert!(run(&home, &["config", "unset", "store"]).status.success());
     let shown = stdout_json(&run(&home, &["config", "show", "--json"]));
     assert!(shown.get("store").is_none(), "{shown}");
+
+    assert!(run(&home, &["config", "set", "key", "abc123"])
+        .status
+        .success());
+    let shown = stdout_json(&run(&home, &["config", "show", "--json"]));
+    assert_eq!(shown["key"], "abc123");
+    assert_eq!(
+        run(&home, &["config", "set", "key", "a&b=c"]).status.code(),
+        Some(2)
+    );
 }
 
 /// What repairs a broken config must still run with one.

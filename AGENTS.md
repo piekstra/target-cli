@@ -32,7 +32,7 @@ make release      # ./target/release/tgt
 | `src/product.rs` | `Product`, what an answer means, `walk` across pages, argument shapes |
 | `src/commands/` | One module per command |
 | `src/mcp.rs`, `src/mcp/tests.rs` | `tgt mcp`: `tgt_search` and `tgt_product` |
-| `src/config.rs` | Settings: `store`, `limit` |
+| `src/config.rs` | Settings: `store`, `limit`, `key` (public) |
 | `tests/` | Offline: command surface, MCP over stdio and HTTP, packaging |
 | `packaging/mcpb/manifest.json` | The Claude Desktop extension |
 
@@ -47,6 +47,8 @@ make release      # ./target/release/tgt
   "no products", while a present, empty one is a real answer. Fields beyond `tcin` are best-effort.
 - **Check an argument's shape before a request.** A TCIN and a store are digits, and a cursor's key
   is a row number. Each reaches a query string.
+- **A failure part way keeps what was read,** and says the list is partial. Do not retry within a
+  search, and keep the pause between pages.
 - **A price is Target's text**, which can be a range. Do not parse it into a number.
 - **Tests are offline** and read no keychain. Fixture values are obvious dummies
   (`tests/fixtures/README.md`). No real product, price or store belongs in a fixture or a doc.

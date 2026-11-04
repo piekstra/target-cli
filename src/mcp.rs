@@ -9,21 +9,30 @@
 //! data. The config is read on each call for the default store, and listing the tools reads
 //! nothing.
 
+use std::time::{Duration, Instant};
+
 use pk_cli_core::error::Reason;
 use pk_cli_core::CliError;
 use pk_cli_mcp::{
     parse_args, ListArgs, Page, ResponseFormat, ResumeRequest, Server, ToolDef, ToolError,
-    ToolOutput, Toolset,
+    ToolOutput, Toolset, CALL_LIMIT,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::client::{RedSky, DEFAULT_STORE};
-use crate::product::{checked_store, checked_tcin, one_product, walk, Product};
+use crate::client::{RedSky, DEFAULT_STORE, REFUSAL_REMEDY, TIMEOUT};
+use crate::product::{checked_store, checked_tcin, one_product, walk, Product, Stopped};
 
 pub const SEARCH_TOOL: &str = "tgt_search";
 pub const PRODUCT_TOOL: &str = "tgt_product";
+
+/// A search stops asking for pages at this age, and hands back what it has with a cursor. A call
+/// is answered at [`CALL_LIMIT`] with its work left running, and one more request can take
+/// [`TIMEOUT`].
+const WALK_BUDGET: Duration = CALL_LIMIT
+    .saturating_sub(TIMEOUT)
+    .saturating_sub(Duration::from_secs(10));
 
 const BROKEN_CONFIG: &str = "the tgt config file cannot be read; ask the user to run `tgt config \
                              show` in a terminal and repair it, then call the tool again";
@@ -31,7 +40,7 @@ const BROKEN_CONFIG: &str = "the tgt config file cannot be read; ask the user to
 /// What a tool needs from Target and from this computer. [`Live`] is the real one; the tests
 /// answer from scrubbed fixtures.
 pub trait Source {
-    /// The `store` setting, read on each call.
+    /// `$TGT_STORE`, else the `store` setting, read on each call.
     fn store_setting(&self) -> Result<Option<String>, ToolError>;
     fn search_page(
         &self,
@@ -46,12 +55,21 @@ pub trait Source {
 /// Target's servers, and the config file.
 pub struct Live;
 
+/// `$TARGET_REDSKY_KEY`, else the `key` setting, as the commands read them. A config too broken
+/// to read leaves the built-in key, which is what it would most likely have said.
 fn client(store: &str) -> Result<RedSky, CliError> {
-    RedSky::new(std::env::var("TARGET_REDSKY_KEY").ok(), store.to_string())
+    let key = std::env::var("TARGET_REDSKY_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .or_else(|| crate::config::load().ok().and_then(|cfg| cfg.key));
+    RedSky::new(key, store.to_string())
 }
 
 impl Source for Live {
     fn store_setting(&self) -> Result<Option<String>, ToolError> {
+        if let Ok(store) = std::env::var("TGT_STORE") {
+            return Ok(Some(store));
+        }
         crate::config::load()
             .map(|cfg| cfg.store)
             .map_err(|_| ToolError::other(BROKEN_CONFIG))
@@ -72,18 +90,39 @@ impl Source for Live {
     }
 }
 
-fn tool_err(e: CliError) -> ToolError {
+fn tool_err(e: CliError, not_found_fix: &str) -> ToolError {
     if e.reason() == Some(Reason::ClientBlocked) {
-        return ToolError::upstream(e.message()).with_fix(
-            "Tell the user Target is refusing requests from this machine. It may pass, and \
-             retrying now will not help",
-        );
+        return ToolError::upstream(e.message()).with_fix(format!(
+            "Tell the user Target is refusing requests from this machine: {REFUSAL_REMEDY}"
+        ));
     }
-    match e {
-        CliError::NotFound(m) => ToolError::not_found(m)
-            .with_fix(format!("Call {SEARCH_TOOL} to find the product's tcin")),
-        other => other.into(),
+    if let CliError::NotFound(m) = e.base() {
+        return ToolError::not_found(m.clone()).with_fix(not_found_fix);
     }
+    match e.remedy().map(str::to_string) {
+        Some(remedy) => ToolError::from(e).with_fix(remedy),
+        None => e.into(),
+    }
+}
+
+/// What to tell a model about a page that ended early. The cursor is what it reads on with.
+fn stopped_early(stopped: Option<Stopped>) -> Option<String> {
+    Some(match stopped? {
+        Stopped::OutOfTime => {
+            "Target was answering slowly, so this page stops here; next_cursor reads on".to_string()
+        }
+        Stopped::Failed(e) => match e.remedy() {
+            Some(remedy) => format!(
+                "reading on failed, so this page stops here; next_cursor reads on later: {} \
+                 ({remedy})",
+                e.message()
+            ),
+            None => format!(
+                "reading on failed, so this page stops here; next_cursor reads on later: {}",
+                e.message()
+            ),
+        },
+    })
 }
 
 /// One product in a result. Concise leaves out the image link.
@@ -133,6 +172,9 @@ struct SearchFilter<'a> {
 pub struct SearchOut {
     pub query: String,
     pub store: String,
+    /// Set when this page ended early. What was read is here, and next_cursor reads on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped_early: Option<String>,
     #[serde(flatten)]
     pub page: Page<ProductItem>,
 }
@@ -153,8 +195,8 @@ impl<S: Source> TgtTools<S> {
         Self { source }
     }
 
-    /// The store a call reads: its argument, the setting, or the built-in default. A setting is
-    /// only read if the argument leaves it open.
+    /// The store a call reads: its argument, `$TGT_STORE`, the setting, or the built-in default,
+    /// as the commands choose it. A setting is only read if the argument leaves it open.
     fn store(&self, arg: &Option<String>) -> Result<String, ToolError> {
         let arg = arg.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let chosen = match arg {
@@ -193,21 +235,25 @@ impl<S: Source> TgtTools<S> {
         };
         // One past the page, so the page knows whether more follow.
         let wanted = u32::try_from(page.limit() + 1).unwrap_or(u32::MAX);
-        let found = walk(
+        let walked = walk(
             |offset, count| self.source.search_page(&store, query, offset, count),
             offset,
             wanted,
+            Some(Instant::now() + WALK_BUDGET),
         )
-        .map_err(tool_err)?;
+        .map_err(|e| tool_err(e, "Try other search terms"))?;
         let detailed = args.list.format().is_detailed();
-        let keyed = found
+        let keyed = walked
+            .found
             .into_iter()
             .map(|(next, product)| (next.to_string(), shaped(product, detailed)))
             .collect();
+        let rest = walked.stopped.is_some().then(|| walked.at.to_string());
         ToolOutput::new(&SearchOut {
             query: query.to_string(),
             store,
-            page: page.page(keyed, None, "a longer query")?,
+            stopped_early: stopped_early(walked.stopped),
+            page: page.page(keyed, rest, "a longer query")?,
         })
     }
 
@@ -215,8 +261,12 @@ impl<S: Source> TgtTools<S> {
         let args: ProductArgs = parse_args(args)?;
         let tcin = checked_tcin(&args.tcin).map_err(|e| ToolError::usage(e.message()))?;
         let store = self.store(&args.store)?;
-        let body = self.source.product(&store, &tcin).map_err(tool_err)?;
-        let product = one_product(&body, &tcin).map_err(tool_err)?;
+        let not_found = format!("Call {SEARCH_TOOL} to find the product's tcin");
+        let body = self
+            .source
+            .product(&store, &tcin)
+            .map_err(|e| tool_err(e, &not_found))?;
+        let product = one_product(&body, &tcin).map_err(|e| tool_err(e, &not_found))?;
         ToolOutput::new(&ProductOut {
             store,
             product: shaped(product, args.response_format.is_detailed()),
@@ -250,7 +300,9 @@ impl<S: Source + Send + Sync> Toolset for TgtTools<S> {
                 "Search Target's products",
                 "Searches Target's product listings by keyword. Use it to find a product, compare \
                  what a store sells, or get a tcin for tgt_product. Returns items with tcin, \
-                 title, brand, price and url, in Target's order; detailed adds the image link.",
+                 title, brand, price and url, in Target's order; detailed adds the image link. \
+                 If stopped_early is set, Target stopped answering part way: what was read is \
+                 here, and next_cursor reads on.",
             )
             .input::<SearchArgs>()
             .output::<SearchOut>(),

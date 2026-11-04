@@ -44,8 +44,15 @@ Sample Lamp & Shade  [$1.00]
 ```
 
 `--limit` (or `-n`) reads up to 200 results, 28 to a request. Prices and availability are per store,
-so `--store <ID>` names one. `tgt config set store <ID>` keeps it, and `tgt config set limit <N>`
-keeps a limit.
+so `--store <ID>` or `$TGT_STORE` names one. `tgt config set store <ID>` keeps it, and
+`tgt config set limit <N>` keeps a limit.
+
+If Target stops answering part way through a long read, `tgt search` prints what it read, says so on
+stderr, and exits 5. Under `--json` the document carries the reason in `stopped`. A rate limit says how
+long to wait when Target does.
+
+Should Target rotate the key built into `tgt`, `tgt config set key <KEY>`, `--key` or
+`$TARGET_REDSKY_KEY` takes a newer one.
 
 ### JSON
 
@@ -87,8 +94,9 @@ no account. **No tool can buy anything, add to a cart or touch an account.**
 | `tgt_search` | What Target lists for a keyword, with prices at a store |
 | `tgt_product` | One product by its TCIN, with its price at a store |
 
-Each takes an optional `store`, and uses your `store` setting otherwise. Concise results leave out the
-image link, and `response_format: detailed` adds it.
+Each takes an optional `store`, and uses `$TGT_STORE` or your `store` setting otherwise. Concise results
+leave out the image link, and `response_format: detailed` adds it. A search that Target stops answering
+part way returns what it read with `stopped_early` and a cursor.
 
 **Claude Code.** Add the `target-cli` plugin from the
 [piekstra plugin marketplace](https://github.com/piekstra/claude-plugins):
