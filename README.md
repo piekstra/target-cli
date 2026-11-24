@@ -162,5 +162,6 @@ Tests are offline and use dummy fixtures. [`AGENTS.md`](AGENTS.md) has the layou
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT)
-at your option.
+Copyright (C) 2026 Caleb Piekstra. Licensed under the GNU Affero General Public
+License, version 3 only (AGPL-3.0-only); see [LICENSE](LICENSE). Releases up to
+and including v0.2.0 were published under MIT OR Apache-2.0.

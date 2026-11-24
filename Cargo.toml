@@ -5,7 +5,7 @@ edition = "2021"
 # 1.89: pk-cli-auth (cli-common) needs it for the token-refresh lock.
 rust-version = "1.89"
 description = "Search and look up Target products via the RedSky API behind target.com, with JSON output, stable exit codes and read-only MCP tools. Unofficial; not affiliated with Target."
-license = "MIT OR Apache-2.0"
+license = "AGPL-3.0-only"
 repository = "https://github.com/piekstra/target-cli"
 readme = "README.md"
 keywords = ["target", "redsky", "shopping", "cli", "products"]
